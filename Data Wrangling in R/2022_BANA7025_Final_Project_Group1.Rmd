@@ -1,0 +1,483 @@
+---
+title: "Data Wrangling Final Project - Group 1"
+author: "Anish Goel | Madhurima Saha | Mitash Mendiratta | Prakash Paruchuri | Prantika Mallick | Sowmya Sree Kalavagunta | Vijayashree Marupeddi"
+date: "07 October, 2022"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# {.tabset}
+
+## **Introduction** {.tabset}
+
+### Objective
+
+Regork is one of the largest retail grocery chains in the United States and they use data to optimize their day to day functions. As part of the Data Science team at Regork, we are constantly looking for opportunities to increase the revenue and profit of the organisation.
+
+Currently, we have been charged with identifying a potential area of growth where the company could invest future resources to increase revenue and profits.
+
+### Solution Summary
+
+We have decided to take the following approach to find growth opportunities:
+
+1.  Profiled customers based on their purchase behavior and determined high value and low value groups.<br>
+2.  For high value profiles we looked at the top product categories contributing to high sales.<br>
+3.  For the high value customers we also looked at the coupon usage.<br>
+4.  We performed monthly and seasonal purchase trends for both groups.<br>
+5.  Conducted analysis on the purchase behavior of customers enrolled in the loyalty program.<br>
+
+### Buisness Impact
+
+This analysis will be insightful in the following ways:  
+
+1.  Identifying customer profiles which would help in running more targeted marketing strategies.    
+2.  Additionally the company will get insights on their top selling products based on customer profiles, which would help running campaigns to increase sales of such products.   
+3.  Identify cost cutting opportunities in terms of product sales with or without coupon usage.
+
+## **Packages Required**
+
+```{r message = FALSE, warning = FALSE, include = FALSE}
+list.of.packages <- c("tidyverse", "knitr", "lubridate", "rmarkdown", "completejourney", "ggrepel", "scales", "RColorBrewer")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if (length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org" )
+```
+
+The following packages are required in order to run the code efficiently without any errors.
+
+```{r message = FALSE, warning = FALSE}
+library(tidyverse)       # easy installation of packages
+library(knitr)           # for dynamic report generation
+library(lubridate)       # for easy date and time manipulation
+library(rmarkdown)       # to convert R Markdown documents into a variety of formats
+library(completejourney) # dataset library
+library(ggrepel)         # implements functions to repel overlapping text labels away from each other and away                            from the data points that they label.
+library(scales)          # provides the internal scaling infrastructure used by ggplot2, and tools to override                            the default breaks, labels, transformations and palettes
+library(RColorBrewer)    # offers a variety of color palettes to use while making different types of plots
+```
+
+## **Data Preparation** {.tabset}
+
+### Dataset Overview
+
+The **completejourney** dataset is available in R under the package of the same name, and provides access to datasets characterizing household level transactions over one year from a group of 2,467 households who are frequent shoppers at Regork. It contains all of each household's purchases. For certain households, demographic information as well as direct marketing contact history are captured.
+
+There are eight built-in datasets available in this package.
+
+1.  campaigns: campaigns received by each household\
+2.  campaign_descriptions: campaign metadata (length of time active)\
+3.  coupons: coupon metadata (UPC code, campaign, etc.)\
+4.  coupon_redemptions: coupon redemptions (household, day, UPC code, campaign)\
+5.  demographics: household demographic data (age, income, family size, etc.)\
+6.  products: product metadata (brand, description, etc.)\
+7.  promotions: data on product placement in mailers and in stores corresponding to advertising campaigns\
+8.  transactions: transaction level data on products purchased by households
+
+The database and its connectivities can be seen below:
+
+```{r echo = FALSE}
+knitr::include_graphics('https://bradleyboehmke.github.io/completejourney/articles/data_relationships.png')
+```
+
+### Importing, Cleaning and Preparing the Data
+
+#### Importing required datasets
+
+```{r message=FALSE, warning=FALSE}
+df_transactions <- get_transactions()
+df_demographics <- demographics
+df_campaigns <- campaigns
+df_campaign_desc <- campaign_descriptions
+df_coupon_redemptions <- coupon_redemptions
+df_coupons <- coupons
+df_products <- products
+```
+
+#### Data Cleaning
+
+This step involves checking the distribution of the transaction data, and removing all such values which could be potential outliers. It also includes looking at the number of missing values in each column of the different datasets in order to decide suitable treatment for the same.
+
+##### **Outlier Check & Treatment**
+
+```{r message = FALSE, warning = FALSE}
+## Checking the distribution of quantity and sales.
+
+quant <- quantile(df_transactions$quantity, probs = c(0.25, 0.50, 0.75, 0.95, 0.99, 0.999, 1))
+print(quant)
+
+sales <- quantile(df_transactions$sales_value, probs = c(0.25, 0.50, 0.75, 0.95, 0.99, 0.9999, 1))
+print(sales)
+```
+
+We trim the sales and quantity data at 99.9% and 99.99% percentiles respectively in order to remove the extreme observations.
+
+```{r message = FALSE, warning = FALSE}
+## Removing potential outliers
+
+df_transactions <- df_transactions %>% 
+  filter(quantity < quantile(quantity, probs = 0.99) & 
+           sales_value < quantile(sales_value, probs = 0.9999))
+```
+
+##### **Missing Values Check**
+
+```{r message = FALSE, warning = FALSE}
+## Checking for missing values in all the data tables used in the analysis.
+
+print(colSums(is.na(df_transactions)))
+
+print(colSums(is.na(df_demographics)))
+
+print(colSums(is.na(df_campaigns)))
+
+print(colSums(is.na(df_campaign_desc)))
+
+print(colSums(is.na(df_products)))
+
+print(colSums(is.na(df_coupons)))
+
+print(colSums(is.na(df_coupon_redemptions)))
+```
+
+From the above results, we can see that most of these tables do not have missing values in any of the columns. However, we see few missing observation in some columns of customer demographics and products tables.
+
+##### **Sanity Check**
+
+Removing transactions which have quantity = 0 and sales value \> 0<br>
+
+```{r message = FALSE, warning = FALSE}
+## Filtering out observations which do not make logical sense.
+
+df_transactions <- df_transactions %>% 
+  filter((quantity > 0 & sales_value != 0))
+```
+
+#### Data Preparation
+
+In this section, we want to segment our customers based on their expenditure, frequency and income profile and classify them as either high-valued or low-valued customers. Since we have demographic information on only 801 customers, we have only used data for those customers whose personal information is available to us for this segmentation.
+
+```{r message = FALSE, warning = FALSE}
+## Identifying customer profiles
+
+df_transactions$month <- month(df_transactions$transaction_timestamp)
+
+cust_profile <- df_transactions %>%
+  inner_join(demographics, by = "household_id") %>% 
+  group_by(income) %>%
+  summarize(average_expenditure = sum(sales_value)/n_distinct(basket_id),
+            basket_Size = sum(quantity)/n_distinct(basket_id),
+            transactions_per_week =  n_distinct(basket_id)/n_distinct(week))
+
+Income_Grps <- cust_profile %>%
+            filter(average_expenditure > median(average_expenditure) &
+                   transactions_per_week < median(cust_profile$transactions_per_week)) %>%
+            select(income) 
+names(Income_Grps) <- "High Value Income Groups"
+
+cust_profile
+Income_Grps
+```
+
+We are focusing on households having demographic information to create our customer profiles. <br>
+
+In all our further analyses, we use the profiles created in conjunction to other tables available in the package to gain insights.
+
+## **Exploratory Data Analysis**
+
+### Identifying customer profiles
+
+```{r fig.height = 5.5, fig.width = 10, message = FALSE, warning = FALSE}
+## Customer profile identification based on plot
+
+ggplot(cust_profile , aes(x = transactions_per_week, y = average_expenditure)) +
+  geom_point(aes(color = income, size = basket_Size )) +
+  scale_color_brewer(palette = "Set3") +
+  labs(title = "Determining High Value Income Groups by Expenditure, Transactions and Basket size ",
+        x = "Transactions per Week",
+        y = "Average Out of Pocket Expenditure",
+        color = "Income",
+        size = "Basket Size") +
+  geom_vline(xintercept = median(cust_profile$transactions_per_week)) +
+  annotate("text", x = median(cust_profile$transactions_per_week) - 3, y = 48,
+           label = "Median Transactions per Week", angle = 90, 
+           size = 3.3, color = "black"
+           ) +
+  geom_hline(yintercept = median(cust_profile$average_expenditure)) +
+  annotate("text", y = median(cust_profile$average_expenditure) + 1, x = 270,
+           label = "Median Avg Out of Pocket Expenditure", angle = 0,
+           size = 3.3, color = "black"
+           ) +
+  geom_label_repel(size = 2.5,
+                   colour = "black",
+                   aes(label = income)
+                  )
+```
+
+Based on the above graph, we identify two customer profiles based on their average expenditure and transactions per week -    
+
+*  Customers having expenditure higher than the median average expenditure and transactions per week lower than the median transaction per week are called **"High Value"** customers.     
+*  All the other customers are tagged as **"Low Value"**.    
+
+For these customer profiles, we further deep-dive and find opportunities of growth by analyzing their spend pattern based on factors like time of the year and coupon redemption rates, etc. <br>
+
+A point of observation to be noted here is that most of our high valued customers belong to the groups with higher income range.
+
+***
+
+### Top Products by Expenditure for High Value Customers
+
+```{r fig.height = 6, fig.width = 10, message = FALSE, warning = FALSE}
+#High Value customer profile - identifying top product categories in terms of expenditure
+
+HighVal_prod <- df_transactions %>%
+              inner_join(df_demographics, by = "household_id") %>%  
+              filter(income %in% Income_Grps$`High Value Income Groups`) %>% 
+              inner_join(df_products, by = "product_id") %>% 
+              group_by(income, product_category) %>%
+              summarise(
+                salesperquantity = sum(sales_value)/sum(quantity),
+                average_expenditure = sum(sales_value)/n_distinct(basket_id),
+                basket_size = sum(quantity)/n_distinct(basket_id),
+                transactions_per_week =  n_distinct(basket_id)/n_distinct(week)
+                ) %>% 
+              slice_max(salesperquantity, n = 3)
+
+HighVal_prod$average_expenditure <- round(HighVal_prod$average_expenditure,2)
+
+colourCount = length(unique(HighVal_prod$product_category))
+getPalette = colorRampPalette(brewer.pal(100, "Set3"))
+
+ggplot(HighVal_prod  , aes(x = income, y = average_expenditure, fill = product_category, width = .65)) +
+  geom_bar(stat = 'identity', position = "dodge") +
+  scale_fill_manual(values = getPalette(colourCount)) +
+  labs( title = " Top 3 Product Categories of High Value Income Groups",
+        x = "Income Levels",
+        y = "Average Out of Pocket Expenditure",
+        color = "Product Category "
+        ) +
+  geom_text(
+        aes(label = average_expenditure),
+        colour = "black", size = 3,
+        vjust = 1.5, position = position_dodge(.7)
+       )
+```
+
+Looking at the top 3 products of high value customers by expenditure shows that these income groups are purchasing expensive products (having high unit price) like fuels, apparels, fragrances etc. justifying their lesser visits but higher expenditure. These products do not contribute to low value income groups' expenditure.
+
+***
+
+### Redemption Activity
+
+```{r fig.height = 6, fig.width = 10, message = FALSE, warning = FALSE}
+## Understanding product sales based on coupon usage
+
+camp_cou <- df_campaigns %>% inner_join(df_campaign_desc, by = "campaign_id") %>%
+            left_join(df_coupon_redemptions, by = c("campaign_id", "household_id")) %>%
+            group_by(campaign_type, household_id) %>%
+            summarise(tot_cou_rcv = n(),
+                    cou_redeem  = n_distinct(coupon_upc),
+                    redemption_rate = n_distinct(coupon_upc)/n())
+
+box <- df_demographics %>% select(c("household_id", "income")) %>% 
+  inner_join(camp_cou, by = "household_id") %>%
+  mutate(Customer_Profile = ifelse(income %in% Income_Grps$`High Value Income Groups`, "High Value" , "Others" ))
+
+ggplot(box,  aes(x = income, y = redemption_rate, fill = Customer_Profile)) +
+    geom_boxplot() +
+    geom_point(position = position_jitterdodge()) +
+    scale_fill_manual(values = getPalette(colourCount)) +
+    labs( title = "Redemption Rate distribution by different customer profiles ",
+          x = "Income Levels",
+          y = "Average Redemption Rate",
+          color = "Customer Profile",
+    ) +
+    facet_grid(.~Customer_Profile,  scales = "free_x") 
+```
+
+Overall, we do not see variation in the redemption rate among low value income groups. However, among the high value income groups, high redemption rates are observed in 175-199K income group with a median value of 0.8.
+
+Hence, we further looked into the product purchases with and without coupon redemption in high value customer profiles.
+
+***
+
+### Coupon Usage by High Value Customers and Others
+
+```{r fig.height = 6, fig.width = 10, message = FALSE, warning = FALSE}
+## Understanding product sales based on coupon non-usage
+without_coupon <- df_transactions %>%
+  inner_join(df_demographics) %>%
+  filter(income %in% Income_Grps$`High Value Income Groups`) %>%
+  inner_join(df_products) %>%
+  inner_join(df_coupons) %>%
+  left_join(df_coupon_redemptions) %>%
+  subset(is.na(redemption_date)) %>%
+  group_by(product_category) %>%
+  summarise(count = n_distinct(product_id), Average_Expenditure = sum(sales_value)/n_distinct(basket_id)) %>%
+  slice_max(Average_Expenditure, n = 5)
+
+without_coupon$Average_Expenditure <- round(without_coupon$Average_Expenditure,2)
+
+colourCount = length(unique(without_coupon$product_category))
+getPalette = colorRampPalette(brewer.pal(100, "Set3"))
+
+ggplot(without_coupon, aes(x = reorder(product_category,-Average_Expenditure), y = Average_Expenditure, fill = product_category)) +
+  geom_bar(stat = 'identity', position = "dodge") +
+  scale_fill_manual(values = getPalette(colourCount)) +
+  labs( title = "Without Coupon: Top 5 Product Categories of High Value Income Groups",
+        x = "Product Category",
+        y = "Average Expenditure",
+        color = "Product Category "
+  ) +
+  geom_text(
+    aes(label = Average_Expenditure),
+    colour = "black", size = 3,
+    vjust = 1.5, position = position_dodge(.9)
+  ) +
+ scale_fill_manual(values = c("DIAPERS & DISPOSABLES" = "#F8F8B6", "FRAGRANCES" = "#CAAEC5", "PHARMACY" = "#D8C965", "SMOKING CESSATIONS" = "#CAE0C4", "INFANT FORMULA" = "#E5C494"))
+
+
+with_coupons <- df_transactions %>%
+  inner_join(df_demographics) %>%
+  filter(income %in% Income_Grps$`High Value Income Groups`) %>%
+  inner_join(df_products) %>%
+  inner_join(df_coupons) %>%
+  inner_join(df_coupon_redemptions) %>%
+  group_by(product_category) %>%
+  summarise(count = n_distinct(product_id),
+            Average_Expenditure = sum(sales_value)/n_distinct(basket_id)) %>%
+  slice_max(Average_Expenditure, n = 5)
+
+with_coupons$Average_Expenditure <- round(with_coupons$Average_Expenditure,2)
+
+colourCount = length(unique(with_coupons$product_category))
+getPalette = colorRampPalette(brewer.pal(100, "Set3"))
+
+ggplot(with_coupons, aes(x = reorder(product_category,-Average_Expenditure), y = Average_Expenditure, fill = product_category)) +
+  geom_bar(stat = 'identity', position = "dodge") +
+  scale_fill_manual(values = getPalette(colourCount)) +
+  labs( title = "With Coupon: Top 5 Product Categories of Others",
+        x = "Product Category",
+        y = "Average Expenditure",
+        color = "Product Category "
+  ) +
+  geom_text(
+    aes(label = Average_Expenditure),
+    colour = "black", size = 3,
+    vjust = 1.5, position = position_dodge(.9)
+  ) +
+  scale_fill_manual(values = c("ANTACIDS" = "#FBB4AE", "DIAPERS & DISPOSABLES" = "#F8F8B6", "GARDEN CENTER" = "#CCEBC5", "INFANT FORMULA" = "#E5C494", "SEAFOOD-FROZEN" = "#FED9A6"))
+
+```
+
+We can observe that baby care products like infant formula, diapers & disposables are purchased with or without using coupons. Hence, these products can be considered as essential products for this profile.<br> The margin in average expenditure between both the cases differs significantly. Thus, these products can be sold without coupons to these high value customers.
+
+***
+
+### Product Purchases of High Value Income Groups Across Seasons
+```{r fig.height = 6, fig.width = 10, message = FALSE, warning = FALSE}
+## Identifying seasonal spending patterns on different products
+
+month_seasons <- function(month){
+  case_when(
+    month %in% c("Mar","Apr","May") ~ "Spring",
+    month %in% c("Jun","Jul","Aug") ~ "Summer",
+    month %in% c("Sep","Oct","Nov") ~ "Fall",
+    month %in% c("Dec","Jan","Feb") ~ "Winter" )
+}
+
+f_high <- df_demographics %>%
+            filter(income %in% Income_Grps$`High Value Income Groups`) %>%
+            inner_join(df_transactions) %>%
+            inner_join(df_products, by = "product_id") %>%
+            filter(product_category != "COUPON/MISC ITEMS") %>%
+            mutate(Month = month(transaction_timestamp, label = TRUE)) %>%
+            mutate(seasons = month_seasons(Month)) %>%
+            group_by(seasons, product_category) %>%
+            summarize(quantities = sum(quantity),
+                      average_expenditure = sum(sales_value)/n_distinct(basket_id)
+                      ) %>%
+            mutate(rank = dense_rank(average_expenditure)) %>%
+            top_n(5, rank)
+
+ggplot(f_high, aes(x = average_expenditure, y = product_category,color = seasons)) +
+      geom_point() +
+      geom_segment(aes(x = 0, xend = average_expenditure, y = product_category, yend = product_category)) +
+      facet_wrap(~seasons, ncol = 1, scales = "free_y") +
+
+       labs( title = "Top 5 products purchased by high value customers by seasons",
+                x = "Average Expenditure",
+                y = "Product Category"
+                
+          ) +
+        scale_fill_manual(values = c("Fall" = "Orange", "Spring" = "Green", "Summer" = "Blue", "Winter" = "Violet"))
+```
+
+Expenditure vary across the seasons. During summers, people are purchasing lawn & garden products to probably grow their garden During winters the customers are purchasing smoking cessations. This could be a result of new year resolutions.
+
+***
+
+### Households in Loyalty Program
+```{r fig.height = 6, fig.width = 10, message = FALSE, warning = FALSE}
+## Analysing spending pattern based on loyalty of customers
+
+loyality_grp <- df_transactions %>% 
+  filter(retail_disc > 0) %>% 
+  summarize(persons = unique(household_id))
+
+Loyality_persons_income_group <- df_demographics %>% 
+  filter(household_id %in% loyality_grp$persons) %>%
+  mutate(group = if_else(demographics$income %in% Income_Grps$`High Value Income Groups`,"High Value Income Group", "Other Income Group"))
+
+ggplot(Loyality_persons_income_group, aes(x = group)) +
+      geom_bar(color = "black",fill = "white") +
+      theme(panel.grid.major = element_blank(), plot.title = element_text(hjust = 0.5, size = 20),panel.background =                   element_blank(), panel.grid.minor = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank(),            axis.ticks.x = element_blank(), axis.text.x = element_text(size = 13)) +
+      labs(x = NULL,y = NULL) +
+      scale_y_continuous(expand = c(0,0)) +
+      geom_text(aes(label = ..count..), stat = 'count',vjust = 1.5, colour = "black", position = position_dodge(.9)) +
+      geom_bar(aes(fill = income),position = 'dodge') +
+      geom_text(aes(label = ..count..,fill = income), stat = 'count',vjust = -1, colour = "white", position =                         position_dodge(.9)) +
+       labs( title = "Affiliation to Loyalty Programs",
+                    x = "Average Expenditure",
+                    y = "Product Category"
+                    
+              ) 
+```
+
+We can clearly see that the number of customers in high income group are not enrolled for the loyalty program as much as the low income group. Our recommendation would be if a customer buys the products mentioned above, we can offer them the loyalty membership during their purchase itself, without charging them for the membership. In order to attract these customers, we can also put up offers for those specific products.
+
+***
+
+## **Summary** 
+
+### Objective and Data Source
+The primary objective of the project is to find growth opportunities by looking at the high value customers’ demographics and purchasing behavior for the year 2017.
+
+The **completejourney** dataset is available in R under the package of the same name, and provides access to datasets characterizing household level transactions over one year from a group of 2,467 households who are frequent shoppers at Regork.
+
+### Methodology  
+
+*  The transaction level data was joined with the product table to extract the top product categories.    
+
+*  Demographics table was joined with this further to be able to identify customer profiles based on expenditure and transactions per week.    
+
+*  Addiitonally, any transaction which has retail_desc > 0 have been considered as Loyalty Program members and their coupon redemption and campaign participation details have been obtained from coupons, campaigns and coupon_redemptions tables.   
+
+### Insights and Recommendations
+
+*  Regork can provide better offers on Fragrances and Smoking Cessations especially during the Winter and Spring season. This is when customers set new resolutions.   
+
+*  Frequency of high value customers visiting the stores can be improved if they are subscribed to the loyalty programs. Also, the benefits provided by these programs should be applicable on preferred products like – baby care products & fragrances.   
+
+*  Coupon redemption rate is high only for a particular strata of the high value customers (175-199K). We can provide coupons on products that are highly preferred by high value customers.   
+
+*  Products like infant formula, diapers & disposables are essentials, bought with or without coupons.  We can increase the range of products in these and related categories.
+
+### Limitations
+
+*  Demographics are missing for majority of households. This limits our insights on income groups.   
+
+*  Loyalty program information of customers could have helped identify better customer profiles.   
+
+*  There are outliers in sales amount and the quantity, which can affect the results of the analysis.  
